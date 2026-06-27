@@ -416,7 +416,7 @@
          title="Tap to add photo"
          role="button"
          aria-label="Upload dadaji photo">
-      <img id="PXL_20210616_040849660.jpg" alt="Nanaji photo">
+      <img id="dadaPhoto" alt="Dadaji photo">
       <div class="photo-placeholder" id="photoPlaceholder">
         <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-5.33 0-8 2.67-8 4v2h16v-2c0-1.33-2.67-4-8-4z"/>
@@ -440,7 +440,7 @@
               aria-label="Edit name"
               spellcheck="false"
               onblur="saveName(this)"
-              onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">नानाजी</span>
+              onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">दादाजी</span>
         <svg class="edit-hint" width="12" height="12" viewBox="0 0 24 24"
              fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" aria-hidden="true">
@@ -526,6 +526,14 @@
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   let rec = null, active = false, finalText = '', lang = 'hi-IN';
 
+  /*
+   * restartTimer — tracks the pending auto-restart from rec.onend.
+   * Cancelling it before any manual action prevents a second recognizer
+   * from spawning alongside one the user just started, which was the
+   * root cause of every word appearing twice.
+   */
+  let restartTimer = null;
+
   function setup() {
     if (!SR) {
       document.getElementById('warnBox').style.display = 'block';
@@ -558,7 +566,14 @@
     };
 
     rec.onend = () => {
-      if (active) setTimeout(() => { try { if (rec) rec.start(); } catch (_) {} }, 250);
+      /* Auto-restart only if still active — and track the timer so it
+         can be cancelled if the user manually presses Stop or Start. */
+      if (active) {
+        restartTimer = setTimeout(() => {
+          restartTimer = null;
+          try { if (rec) rec.start(); } catch (_) {}
+        }, 250);
+      }
     };
     return true;
   }
@@ -573,6 +588,13 @@
 
   function toggleListen() {
     if (!rec && !setup()) return;
+
+    /* Always cancel any pending auto-restart before taking manual action.
+       This is the core fix — without this, the timer fires after the user
+       has already started a new session, creating two listeners at once. */
+    clearTimeout(restartTimer);
+    restartTimer = null;
+
     if (active) {
       active = false;
       try { rec.stop(); } catch (_) {}
@@ -580,10 +602,10 @@
     } else {
       finalText = ''; render('', '');
       active = true; rec.lang = lang;
-      try { rec.start(); } catch (_) {
-        rec = null;
-        if (setup()) { rec.lang = lang; try { rec.start(); } catch (__) {} }
-      }
+      /* If start() throws (rare), the existing session is already running —
+         just leave it. Do NOT create a new rec object here, which was the
+         original bug: two rec instances → same speech heard twice. */
+      try { rec.start(); } catch (_) {}
       setStatus(true, lang === 'hi-IN' ? 'सुन रहा है...' : 'Listening...');
     }
     syncBtn();
@@ -617,6 +639,8 @@
     document.getElementById('hiBtn').className = 'lang-pill' + (code === 'hi' ? ' active' : '');
     document.getElementById('enBtn').className = 'lang-pill' + (code === 'en' ? ' active' : '');
     if (active && rec) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
       try { rec.stop(); } catch (_) {}
       finalText = ''; render('', '');
       setTimeout(() => {
@@ -697,7 +721,10 @@
 
   /* ── Speech data clears on close; photo & name persist ── */
   window.addEventListener('beforeunload', () => {
-    active = false; finalText = '';
+    active = false;
+    clearTimeout(restartTimer);
+    restartTimer = null;
+    finalText = '';
     if (rec) { try { rec.abort(); } catch (_) {} rec = null; }
   });
 
